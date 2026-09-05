@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Myanmar PDF Batch OCR</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 840px; margin: 30px auto; padding: 0 20px; background: #f8fafc; color: #0f172a; line-height: 1.5; }
+    .card { background: #fff; padding: 24px; border-radius: 10px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05); }
+    h2 { margin-top: 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 15px; }
+    label { font-size: 13px; font-weight: 600; display: block; margin-bottom: 4px; }
+    input, select, button { width: 100%; padding: 9px; border-radius: 6px; border: 1px solid #cbd5e1; box-sizing: border-box; font-size: 14px; }
+    button { background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; border: none; }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
+    .file-info { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 10px 12px; border-radius: 6px; font-size: 14px; margin: 12px 0; display: none; }
+    .status { margin: 12px 0; padding: 10px; background: #f1f5f9; border-radius: 6px; font-size: 13px; display: none; }
+    .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+    textarea { width: 100%; height: 350px; margin-top: 15px; padding: 12px; border-radius: 6px; border: 1px solid #cbd5e1; box-sizing: border-box; font-family: inherit; font-size: 14px; white-space: pre-wrap; }
+    .checkbox-label { display: flex; align-items: center; gap: 8px; font-weight: normal; font-size: 13px; cursor: pointer; margin-top: 10px; }
+    .checkbox-label input { width: auto; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>📄 Myanmar PDF Batch OCR Converter</h2>
+
+  <!-- File Input -->
+  <div>
+    <label>၁။ PDF ဖိုင် ရွေးချယ်ပါ (၁၅၀ MB အထိ ထည့်နိုင်သည်):</label>
+    <input type="file" id="pdfInput" accept="application/pdf" />
+  </div>
+
+  <div id="fileInfo" class="file-info"></div>
+
+  <!-- Settings Grid -->
+  <div class="grid" style="margin-top: 15px;">
+    <div>
+      <label>စတင်မည့် စာမျက်နှာ:</label>
+      <input type="number" id="startPage" value="1" min="1" disabled />
+    </div>
+    <div>
+      <label>ပြီးဆုံးမည့် စာမျက်နှာ:</label>
+      <input type="number" id="endPage" value="20" min="1" disabled />
+    </div>
+    <div>
+      <label>လုပ်ဆောင်မည့် ပုံစံ:</label>
+      <select id="modeSelect">
+        <option value="smart">Auto/Smart (စာသားမရှိမှ OCR လုပ်မည်)</option>
+        <option value="ocr_only">Force OCR (Scanned ဓာတ်ပုံ စာအုပ်များ)</option>
+      </select>
+    </div>
+    <div>
+      <label>OCR ဘာသာစကား:</label>
+      <select id="langSelect">
+        <option value="mya+eng">မြန်မာ + English</option>
+        <option value="mya">မြန်မာစာ သီးသန့်</option>
+      </select>
+    </div>
+  </div>
+
+  <label class="checkbox-label">
+    <input type="checkbox" id="appendCheck" checked />
+    ယခင်ရရှိထားသော စာသားများ၏ နောက်တွင် ဆက်ပေါင်းထည့်မည် (Append)
+  </label>
+
+  <div class="btn-group">
+    <button id="runBtn" onclick="processBatch()" disabled>စာသား စတင်ထုတ်ယူမည်</button>
+    <button id="dlBtn" onclick="downloadTxt()" style="background: #10b981; display: none;">Text ဖိုင် ဒေါင်းလုဒ်ရယူမည် (.txt)</button>
+    <button id="clearBtn" onclick="clearText()" style="background: #ef4444; width: auto; display: none;">စာသားရှင်းမည်</button>
+  </div>
+
+  <div id="statusBox" class="status"></div>
+  <textarea id="output" placeholder="ရရှိလာသော စာသားများကို ဤနေရာတွင် စုစည်းပြသပါမည်..."></textarea>
+</div>
+
+<script>
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  let currentPdf = null;
+  let totalPages = 0;
+  let ocrWorker = null;
+  let currentLang = "";
+
+  const fileInput = document.getElementById('pdfInput');
+  const fileInfo = document.getElementById('fileInfo');
+  const startPageInput = document.getElementById('startPage');
+  const endPageInput = document.getElementById('endPage');
+  const runBtn = document.getElementById('runBtn');
+  const dlBtn = document.getElementById('dlBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const statusBox = document.getElementById('statusBox');
+  const output = document.getElementById('output');
+
+  function setStatus(msg) {
+    statusBox.style.display = 'block';
+    statusBox.innerText = msg;
+  }
+
+  // ၁။ ဖိုင်ရွေးလိုက်တာနဲ့ PDF ကို တစ်ခါတည်း Load လုပ်ပြီး Page Count ရှာခြင်း
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setStatus("ဖိုင်ကြီးကို စစ်ဆေးနေပါသည် (ခေတ္တစောင့်ပါ)...");
+    runBtn.disabled = true;
+
+    try {
+      const buffer = await file.arrayBuffer();
+      currentPdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+      totalPages = currentPdf.numPages;
+
+      fileInfo.style.display = "block";
+      fileInfo.innerHTML = `✅ <b>${file.name}</b> ကို ဖတ်ပြီးပါပြီ။ စုစုပေါင်း စာမျက်နှာ: <b>${totalPages}</b> မျက်နှာ ရှိပါသည်။`;
+
+      startPageInput.disabled = false;
+      endPageInput.disabled = false;
+      startPageInput.value = 1;
+      endPageInput.value = Math.min(20, totalPages); // ပထမဆုံး အကြိမ်တွင် အမျက်နှာ ၂၀ ဟု default သတ်မှတ်ပေးခြင်း
+      runBtn.disabled = false;
+      setStatus("စာမျက်နှာ ရွေးချယ်ပြီး 'စာသား စတင်ထုတ်ယူမည်' ကို နှိပ်နိုင်ပါပြီ။");
+    } catch (err) {
+      console.error(err);
+      setStatus("PDF ဖတ်ရာတွင် အမှားဖြစ်သွားပါသည်: " + err.message);
+    }
+  });
+
+  // ၂။ ရွေးချယ်ထားသော စာမျက်နှာများကို Batch အလိုက် ဖတ်ခြင်း
+  async function processBatch() {
+    if (!currentPdf) return;
+
+    const start = parseInt(startPageInput.value) || 1;
+    const end = parseInt(endPageInput.value) || totalPages;
+    const mode = document.getElementById('modeSelect').value;
+    const lang = document.getElementById('langSelect').value;
+    const isAppend = document.getElementById('appendCheck').checked;
+
+    if (start > end || start < 1 || end > totalPages) {
+      alert(`စာမျက်နှာ နံပါတ်သည် ၁ မှ ${totalPages} အတွင်း ဖြစ်ရပါမည်။`);
+      return;
+    }
+
+    runBtn.disabled = true;
+    if (!isAppend) output.value = '';
+
+    try {
+      // Tesseract Worker တစ်ခုတည်းကို Reuse ပြုလုပ်ခြင်း (ပိုမြန်စေရန်)
+      if (!ocrWorker || currentLang !== lang) {
+        setStatus("မြန်မာ OCR Model ကို memory ထဲ ပြင်ဆင်နေပါသည်...");
+        if (ocrWorker) await ocrWorker.terminate();
+        ocrWorker = await Tesseract.createWorker(lang);
+        currentLang = lang;
+      }
+
+      for (let p = start; p <= end; p++) {
+        setStatus(`စာမျက်နှာ (${p} / ${end}) ကို လုပ်ဆောင်နေပါသည်...`);
+        const page = await currentPdf.getPage(p);
+        let text = "";
+
+        if (mode === "smart") {
+          const content = await page.getTextContent();
+          text = content.items.map(i => i.str).join(" ");
+        }
+
+        // စာသား မပါလျှင် OCR လုပ်ခြင်း
+        if (!text.trim() || mode === "ocr_only") {
+          setStatus(`စာမျက်နှာ (${p} / ${end}) ကို မြန်မာ OCR ဖတ်နေပါသည်...`);
+          
+          const viewport = page.getViewport({ scale: 1.8 });
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          const ctx = canvas.getContext('2d');
+
+          await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+          const res = await ocrWorker.recognize(canvas);
+          text = res.data.text;
+
+          // Memory Release
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+
+        const pageResult = `--- စာမျက်နှာ (${p}) ---\n` + text.trim() + "\n\n";
+        output.value += pageResult;
+        output.scrollTop = output.scrollHeight;
+      }
+
+      setStatus(`စာမျက်နှာ ${start} မှ ${end} အထိ ပြီးစီးပါပြီ!`);
+      dlBtn.style.display = 'inline-block';
+      clearBtn.style.display = 'inline-block';
+
+      // အလုပ်ပြီးပါက နောက်တစ်သုတ်အတွက် စာမျက်နှာ Range ကို Auto တိုးပေးခြင်း
+      if (end < totalPages) {
+        startPageInput.value = end + 1;
+        endPageInput.value = Math.min(end + (end - start + 1), totalPages);
+      }
+    } catch (err) {
+      console.error(err);
+      setStatus("Error: " + err.message);
+    } finally {
+      runBtn.disabled = false;
+    }
+  }
+
+  function downloadTxt() {
+    const blob = new Blob([output.value], { type: "text/plain;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "myanmar_extracted_text.txt";
+    link.click();
+  }
+
+  function clearText() {
+    if (confirm("စာသားများကို အကုန်ရှင်းထုတ်မှာ သေချာပါသလား?")) {
+      output.value = "";
+      dlBtn.style.display = "none";
+      clearBtn.style.display = "none";
+    }
+  }
+</script>
+
+</body>
+</html>
